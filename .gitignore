@@ -1,0 +1,94 @@
+# ==========================================
+# GitIgnore para Sistema Seguro IESS
+# ==========================================
+
+# Python / Django
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.sqlite3
+*.db
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-debug.log*
+frontend/dist/
+frontend/dist-ssr/
+frontend/.env.local
+frontend/.env.*.local
+frontend/.vite/
+
+# Flutter / Dart (App Móvil)
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+app_movil/**/build/
+app_movil/**/.dart_tool/
+app_movil/**/.flutter-plugins
+app_movil/**/.flutter-plugins-dependencies
+app_movil/**/.packages
+app_movil/**/.pub-cache/
+app_movil/**/.pub/
+app_movil/**/android/app/debug/
+app_movil/**/android/app/profile/
+app_movil/**/android/app/release/
+app_movil/**/.widget_preview/
+
+# IDEs & Editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Sistema Operativo
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs y volcados
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# Docker / Entornos locales
+.env
+.env.local
