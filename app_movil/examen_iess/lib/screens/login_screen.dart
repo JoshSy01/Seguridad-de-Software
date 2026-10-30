@@ -15,8 +15,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _api = ApiService();
 
   // Estados de Login
-  final _cedulaController = TextEditingController(text: '1710000017');
-  final _passwordController = TextEditingController(text: 'ClaveSegura#IESS2026!');
+  final _cedulaController = TextEditingController();
+  final _passwordController = TextEditingController();
   final _otpController = TextEditingController();
 
   bool _isOtpStep = false;
@@ -424,7 +424,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         maxLength: 10,
                         decoration: InputDecoration(
                           labelText: 'Número de Cédula Ecuatoriana',
-                          hintText: '1710000017',
+                          hintText: '1710000000',
                           prefixIcon: const Icon(Icons.badge_outlined, size: 20),
                           border: const OutlineInputBorder(),
                           counterText: '',

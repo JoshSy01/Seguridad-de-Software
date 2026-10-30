@@ -17,12 +17,12 @@ class _RegistroAfiliadoScreenState extends State<RegistroAfiliadoScreen> {
   String? _errorMessage;
 
   // Paso 0: Cédula
-  final _cedulaController = TextEditingController(text: '1710000058');
+  final _cedulaController = TextEditingController();
   Map<String, dynamic>? _padronData;
 
   // Paso 1: Datos contacto y contraseña
-  final _emailController = TextEditingController(text: 'diego.morales@mail.com');
-  final _telefonoController = TextEditingController(text: '0998887766');
+  final _emailController = TextEditingController();
+  final _telefonoController = TextEditingController();
   final _passwordController = TextEditingController();
 
   // Paso 2: OTP
@@ -266,7 +266,7 @@ class _RegistroAfiliadoScreenState extends State<RegistroAfiliadoScreen> {
                         maxLength: 10,
                         decoration: InputDecoration(
                           labelText: 'Cédula Ecuatoriana',
-                          hintText: '1710000058',
+                          hintText: '1710000000',
                           prefixIcon: const Icon(Icons.badge_outlined, size: 20),
                           border: const OutlineInputBorder(),
                           counterText: '',
