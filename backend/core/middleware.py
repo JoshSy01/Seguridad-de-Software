@@ -131,14 +131,49 @@ class SQLInjectionGuardMiddleware:
         return self.get_response(request)
 
 
+class PayloadSizeLimitMiddleware:
+    """
+    Protección perimetral Anti-DDoS contra ataques de inundación de carga útil (JSON Bombs,
+    Buffer Overflow y agotamiento de memoria). Limita peticiones a un máximo de 256 KB.
+    """
+
+    MAX_CONTENT_LENGTH = 262144  # 256 KB
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path.startswith("/api/"):
+            try:
+                content_length = int(request.META.get("CONTENT_LENGTH") or 0)
+                if content_length > self.MAX_CONTENT_LENGTH:
+                    return JsonResponse(
+                        {
+                            "detail": "Carga útil excesiva: la solicitud excede el límite de tamaño permitido (256 KB - Anti-DDoS)."
+                        },
+                        status=413,
+                    )
+            except (ValueError, TypeError):
+                pass
+        return self.get_response(request)
+
+
 class RateLimitMiddleware:
     """
-    Control de tasa por IP y por Usuario/Actor sobre `/api/*` (Req. 101).
+    Control de tasa multicapa Anti-DDoS y Anti-Fuerza Bruta por IP, Endpoint y Usuario (Req. 101).
     """
 
     WINDOW_SECONDS = 60
-    MAX_REQUESTS_PER_IP = 200
-    MAX_REQUESTS_PER_USER = 120
+    MAX_REQUESTS_PER_IP = 150
+    MAX_REQUESTS_PER_USER = 100
+
+    # Límites estrictos para endpoints críticos
+    ENDPOINT_LIMITS = {
+        "/api/auth/login/": 40,
+        "/api/auth/verify-otp/": 40,
+        "/api/auth/registro/solicitar-otp/": 15,
+        "/api/turnos/reservar/": 40,
+    }
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -147,15 +182,43 @@ class RateLimitMiddleware:
         if request.path.startswith("/api/") and request.path != "/api/health/":
             ip = get_client_ip(request)
             bucket = int(time.time() // self.WINDOW_SECONDS)
+
+            # 1. Rate limiting específico por endpoint crítico (Anti-Fuerza Bruta & Anti-Spam)
+            for path_prefix, limit in self.ENDPOINT_LIMITS.items():
+                if request.path.startswith(path_prefix):
+                    ep_key = f"ratelimit:ep:{path_prefix}:{ip}:{bucket}"
+                    try:
+                        current_ep = int(cache.get(ep_key, 0)) + 1
+                        cache.set(ep_key, current_ep, timeout=self.WINDOW_SECONDS + 5)
+                        if current_ep > limit:
+                            resp = JsonResponse(
+                                {
+                                    "detail": f"Demasiadas solicitudes para este servicio ({current_ep}/{limit}). Bloqueo temporal Anti-DDoS / Anti-Fuerza Bruta.",
+                                    "retry_after_seconds": 60,
+                                },
+                                status=429,
+                            )
+                            resp["Retry-After"] = "60"
+                            return resp
+                    except Exception:
+                        pass
+                    break
+
+            # 2. Rate limiting global por IP
             ip_key = f"ratelimit:ip:{ip}:{bucket}"
             try:
                 current_ip = int(cache.get(ip_key, 0)) + 1
                 cache.set(ip_key, current_ip, timeout=self.WINDOW_SECONDS + 5)
                 if current_ip > self.MAX_REQUESTS_PER_IP:
-                    return JsonResponse(
-                        {"detail": "Límite de peticiones por IP excedido (Rate Limiting Req. 101)."},
+                    resp = JsonResponse(
+                        {
+                            "detail": "Límite de peticiones por IP excedido (Rate Limiting Anti-DDoS - Req. 101).",
+                            "retry_after_seconds": 60,
+                        },
                         status=429,
                     )
+                    resp["Retry-After"] = "60"
+                    return resp
 
                 auth_hdr = request.META.get("HTTP_AUTHORIZATION", "")
                 if auth_hdr.startswith("Bearer "):
@@ -164,10 +227,15 @@ class RateLimitMiddleware:
                     current_usr = int(cache.get(usr_key, 0)) + 1
                     cache.set(usr_key, current_usr, timeout=self.WINDOW_SECONDS + 5)
                     if current_usr > self.MAX_REQUESTS_PER_USER:
-                        return JsonResponse(
-                            {"detail": "Límite de peticiones por sesión de usuario excedido (Req. 101)."},
+                        resp = JsonResponse(
+                            {
+                                "detail": "Límite de peticiones por sesión de usuario excedido (Req. 101).",
+                                "retry_after_seconds": 60,
+                            },
                             status=429,
                         )
+                        resp["Retry-After"] = "60"
+                        return resp
             except Exception:
                 pass
 

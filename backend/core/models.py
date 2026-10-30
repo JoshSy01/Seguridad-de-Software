@@ -191,7 +191,16 @@ class Turno(models.Model):
     class Meta:
         db_table = "core_turno"
         constraints = [
-            models.UniqueConstraint(fields=["medico", "fecha", "hora"], name="unique_medico_fecha_hora")
+            models.UniqueConstraint(
+                fields=["medico", "fecha", "hora"],
+                condition=models.Q(estado="RESERVADO"),
+                name="unique_medico_fecha_hora_activo",
+            ),
+            models.UniqueConstraint(
+                fields=["establecimiento", "especialidad", "fecha", "hora"],
+                condition=models.Q(estado="RESERVADO"),
+                name="unique_est_esp_fecha_hora_activo",
+            ),
         ]
 
 

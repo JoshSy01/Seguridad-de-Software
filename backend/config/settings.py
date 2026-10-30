@@ -24,10 +24,11 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "core.middleware.PayloadSizeLimitMiddleware",
+    "core.middleware.SQLInjectionGuardMiddleware",
+    "core.middleware.RateLimitMiddleware",
     "django.middleware.common.CommonMiddleware",
     "core.middleware.AuditLogMiddleware",
-    "core.middleware.RateLimitMiddleware",
-    "core.middleware.SQLInjectionGuardMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 

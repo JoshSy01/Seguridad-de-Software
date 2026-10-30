@@ -4,7 +4,7 @@ import io
 import json
 from datetime import datetime, timedelta
 
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.cache import cache
 from django.db import IntegrityError, connection, transaction
 from django.db.models import Count, Q
@@ -76,6 +76,8 @@ ESTABLECIMIENTOS_DEFAULT = [
     "Centro de Salud IESS Cotocollao",
     "Hospital del Día El Batán",
 ]
+
+DUMMY_PASSWORD_HASH = make_password("DummyPasswordTimingMitigation#2026!")
 
 
 def obtener_establecimientos_activos() -> list[str]:
@@ -312,8 +314,23 @@ class LoginView(APIView):
         cedula = serializer.validated_data["cedula"].strip()
         password = serializer.validated_data["password"]
 
+        client_ip = get_client_ip(request)
+        ip_fail_key = f"login_fails_ip:{client_ip}"
+        fails_ip = int(cache.get(ip_fail_key, 0))
+        if fails_ip >= 15:
+            return Response(
+                {
+                    "detail": "Demasiados intentos de acceso fallidos desde esta dirección IP. Intente más tarde.",
+                    "retry_after_seconds": 900,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         user = User.objects.filter(cedula=cedula, is_active=True).first()
         if not user:
+            # Mitigación estricta de Timing Attacks (Anti-Enumeración de Cédulas)
+            check_password(password, DUMMY_PASSWORD_HASH)
+            cache.set(ip_fail_key, fails_ip + 1, timeout=900)
             return Response(
                 {"detail": "Credenciales inválidas."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -345,6 +362,7 @@ class LoginView(APIView):
             if user.intentos_fallidos >= self.MAX_FAILED_ATTEMPTS:
                 user.bloqueado_hasta = now + timedelta(minutes=self.LOCKOUT_MINUTES)
             user.save(update_fields=["intentos_fallidos", "bloqueado_hasta"])
+            cache.set(ip_fail_key, fails_ip + 1, timeout=900)
             return Response(
                 {"detail": "Credenciales inválidas."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -353,6 +371,7 @@ class LoginView(APIView):
         user.intentos_fallidos = 0
         user.bloqueado_hasta = None
         user.save(update_fields=["intentos_fallidos", "bloqueado_hasta"])
+        cache.delete(ip_fail_key)
 
         otp_code = generar_otp_seguro("login", user.cedula, ttl_segundos=300)
         return Response(
@@ -619,11 +638,23 @@ class DisponibilidadTurnosView(APIView):
             activo=True,
         ).select_related("medico")
 
-        ocupados = set(
+        # Turnos activos ocupados por médico (solo estado RESERVADO)
+        ocupados_medico = set(
             Turno.objects.filter(
                 fecha=fecha_obj,
                 medico__in=[h.medico_id for h in horarios],
+                estado=Turno.Estado.RESERVADO,
             ).values_list("medico_id", "hora")
+        )
+
+        # Turnos activos ocupados en el mismo establecimiento y especialidad
+        ocupados_especialidad = set(
+            Turno.objects.filter(
+                fecha=fecha_obj,
+                establecimiento=establecimiento,
+                especialidad=especialidad,
+                estado=Turno.Estado.RESERVADO,
+            ).values_list("hora", flat=True)
         )
 
         hora_actual_local = timezone.localtime().time()
@@ -637,7 +668,10 @@ class DisponibilidadTurnosView(APIView):
             while cursor < limite:
                 hora_slot = cursor.time()
                 pasado_hoy = fecha_obj == hoy and hora_slot <= hora_actual_local
-                esta_ocupado = (h.medico_id, hora_slot) in ocupados
+                esta_ocupado = (
+                    (h.medico_id, hora_slot) in ocupados_medico
+                    or hora_slot in ocupados_especialidad
+                )
                 libre = (not pasado_hoy) and (not esta_ocupado)
 
                 item = {
@@ -723,6 +757,7 @@ class ReservarTurnoView(APIView):
 
         try:
             with transaction.atomic():
+                # 1. Validar límite de 1 turno activo por especialidad para el beneficiario (Req. 101)
                 ya_tiene_activo = (
                     Turno.objects.select_for_update()
                     .filter(
@@ -740,6 +775,29 @@ class ReservarTurnoView(APIView):
                             )
                         },
                         status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # 2. Bloqueo atómico contra doble reserva concurrente en mismo establecimiento, especialidad o médico
+                ya_ocupado = (
+                    Turno.objects.select_for_update()
+                    .filter(
+                        Q(medico=medico)
+                        | Q(
+                            establecimiento=data["establecimiento"],
+                            especialidad=data["especialidad"],
+                        ),
+                        fecha=data["fecha"],
+                        hora=data["hora"],
+                        estado=Turno.Estado.RESERVADO,
+                    )
+                    .exists()
+                )
+                if ya_ocupado:
+                    return Response(
+                        {
+                            "detail": "El turno seleccionado para este establecimiento, especialidad y horario ya fue reservado por otro usuario."
+                        },
+                        status=status.HTTP_409_CONFLICT,
                     )
 
                 turno = Turno.objects.create(
@@ -883,6 +941,30 @@ class ReprogramarTurnoView(APIView):
 
         try:
             with transaction.atomic():
+                # Validar atómicamente contra doble reserva en nuevo horario
+                ya_ocupado = (
+                    Turno.objects.select_for_update()
+                    .filter(
+                        Q(medico=nuevo_medico)
+                        | Q(
+                            establecimiento=turno.establecimiento,
+                            especialidad=turno.especialidad,
+                        ),
+                        fecha=nueva_fecha,
+                        hora=nueva_hora,
+                        estado=Turno.Estado.RESERVADO,
+                    )
+                    .exclude(id=turno.id)
+                    .exists()
+                )
+                if ya_ocupado:
+                    return Response(
+                        {
+                            "detail": "El nuevo horario seleccionado ya fue reservado por otra solicitud."
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
                 turno.fecha = nueva_fecha
                 turno.hora = nueva_hora
                 turno.medico = nuevo_medico

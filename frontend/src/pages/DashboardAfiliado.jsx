@@ -141,6 +141,25 @@ export default function DashboardAfiliado({ user }) {
     }
   }, [establecimiento, especialidad, fecha, hoyIso, consultarDisponibilidad]);
 
+  // Sincronización periódica y al enfocar para reflejar reservas simultáneas de otros usuarios
+  useEffect(() => {
+    if (tab !== "AGENDAR" || !establecimiento || !especialidad || !fecha || fecha < hoyIso) return;
+
+    const interval = setInterval(() => {
+      consultarDisponibilidad(establecimiento, especialidad, fecha);
+    }, 12000);
+
+    const onFocus = () => {
+      consultarDisponibilidad(establecimiento, especialidad, fecha);
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [tab, establecimiento, especialidad, fecha, hoyIso, consultarDisponibilidad]);
+
   // Carga automática de cupos libres en el modal de reprogramación
   useEffect(() => {
     if (!reprogTurno || !reprogFecha || reprogFecha < mananaIso) {
@@ -199,6 +218,8 @@ export default function DashboardAfiliado({ user }) {
       ]);
     } catch (err) {
       setError(err.response?.data?.detail || "No se pudo reservar la cita.");
+      setSelectedSlot(null);
+      await consultarDisponibilidad(establecimiento, especialidad, fecha);
     } finally {
       setSubmitting(false);
     }

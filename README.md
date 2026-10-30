@@ -96,16 +96,17 @@ graph TD
 
 | Requisito | Control Implementado | Estado |
 |---|---|---|
-| **ID 101 - Funciones** | Bloqueo atómico con `select_for_update()`, constraint `UNIQUE(medico_id, fecha, hora)`, límite de 1 turno activo por especialidad y cancelación/reprogramación con anticipación mínima de 24 horas. | ✅ Cumplido |
+| **ID 101 - Funciones (Anti-Doble Reserva)** | Bloqueo atómico con `select_for_update()`, índices únicos parciales en PostgreSQL (`unique_medico_fecha_hora_activo` y `unique_est_esp_fecha_hora_activo` para `estado = 'RESERVADO'`), liberación automática de cupos tras cancelación, límite de 1 turno activo por especialidad y cancelación/reprogramación con anticipación mínima de 24 horas. | ✅ Cumplido |
 | **ID 102 - Identificación** | Validación de Cédula Ecuatoriana (Algoritmo Módulo 10 del Registro Civil), contraste con Padrón IESS, recolección mínima de datos (solo email y teléfono) y activación con OTP de 6 dígitos. | ✅ Cumplido |
-| **ID 106 - Familiares (Anti-BOLA)** | Prohibición de agendamiento directo por cédula de terceros. Validación automática de hijos menores y verificación por código OTP para autorizar adultos delegados. | ✅ Cumplido |
-| **ID 107 - Autenticación Robusta** | Prohibido usar cédula o fecha de nacimiento como clave. Mínimo 12 caracteres con complejidad (mayúsculas, minúsculas, números y símbolos). Bloqueo tras 5 intentos fallidos por 15 minutos y segundo factor MFA (OTP). | ✅ Cumplido |
-| **ID 108 - Permisos (RBAC/ABAC)** | Recepción solo ve turnos de hoy en su unidad con datos de contacto enmascarados; Médicos solo acceden a su agenda; Soporte técnico únicamente consulta métricas y logs sanitizados; Administradores gestionan catálogos. | ✅ Cumplido |
+| **ID 106 - Familiares (Anti-BOLA/IDOR)** | Prohibición de agendamiento directo por cédula de terceros. Validación automática de hijos menores y verificación por código OTP para autorizar adultos delegados. Validación ABAC en cada petición. | ✅ Cumplido |
+| **ID 107 - Autenticación Robusta** | Prohibido usar cédula o fecha de nacimiento como clave. Mínimo 12 caracteres con complejidad. Bloqueo tras 5 intentos fallidos por 15 minutos, mitigación de Timing Attacks (cómputo constante de contraseñas para usuarios inexistentes) y segundo factor MFA (OTP). | ✅ Cumplido |
+| **ID 108 - Permisos (Anti-Escalamiento)** | RBAC/ABAC estricto: Recepción solo ve turnos de hoy en su unidad con datos de contacto enmascarados; Médicos solo acceden a su agenda; Soporte técnico únicamente consulta métricas y logs sanitizados; Administradores gestionan catálogos. Verificación de consistencia del claim de rol en cada petición JWT stateful. | ✅ Cumplido |
 | **ID 109 - Notificaciones Seguras** | Notificaciones sin enlaces directos sin autenticación ni diagnósticos clínicos. Solo redirigen a iniciar sesión. | ✅ Cumplido |
 | **ID 110 - Integración y Resiliencia** | Circuit Breaker configurado con límite de fallos y recuperación automática; caché de 15 minutos para consultas de afiliación. | ✅ Cumplido |
-| **ID 111 - Auditoría Inmutable** | `AuditLogMiddleware` reemplaza automáticamente contraseñas, tokens JWT y códigos OTP por `[REDACTED]` antes de almacenar en base de datos. | ✅ Cumplido |
-| **ID 114 - Minimización LOPDP** | Esquema de base de datos sin campos sensibles ni clínicos (prohibido empleador, sueldo, diagnósticos, recetas o religión). | ✅ Cumplido |
-| **Protección Anti-SQLi** | Consultas 100% parametrizadas mediante el ORM de Django y uso exclusivo de queries preparadas con tipado estricto en serializers. | ✅ Cumplido |
+| **ID 111 - Auditoría Inmutable** | `AuditLogMiddleware` reemplaza automáticamente contraseñas, tokens JWT y códigos OTP por `[REDACTED]` antes de almacenar en base de datos. Triggers de base de datos prohíben modificaciones (WORM). | ✅ Cumplido |
+| **ID 114 - Minimización LOPDP** | Esquema de base de datos sin campos sensibles ni clínicos (prohibido empleador, sueldo, diagnósticos, recetas o religión). Purga automática de registros que superan el plazo de retención. | ✅ Cumplido |
+| **Protección Anti-DDoS** | Filtro de tamaño de carga útil `PayloadSizeLimitMiddleware` (máx. 256 KB contra JSON Bombs) y limitación de tasa multicapa por IP, por Endpoint crítico (Login, OTP, Reservas) y por sesión con cabecera `Retry-After`. | ✅ Cumplido |
+| **Protección Anti-SQLi** | WAF perimetral `SQLInjectionGuardMiddleware` antes del rate limiter, consultas 100% parametrizadas mediante el ORM de Django y uso exclusivo de queries preparadas con tipado estricto en serializers. | ✅ Cumplido |
 
 ---
 
@@ -223,7 +224,38 @@ Implementado tanto en backend ([`serializers.py`](backend/core/serializers.py)) 
 - Todas las operaciones utilizan el ORM de Django con consultas parametrizadas en controladores nativos de PostgreSQL.
 - Los tipos de datos se filtran y validan estrictamente mediante serializers antes de llegar a la capa de persistencia.
 
+### Prevención de Doble Reserva Concurrente y Disponibilidad en Tiempo Real
+- **PostgreSQL Partial Unique Indexes**:
+  - `unique_medico_fecha_hora_activo`: Impide físicamente en base de datos que un médico tenga dos citas en `estado = 'RESERVADO'` al mismo tiempo.
+  - `unique_est_esp_fecha_hora_activo`: Impide que en un mismo establecimiento y especialidad se reserve el mismo horario simultáneamente.
+- **Transacciones Atómicas con `select_for_update()`**:
+  - Antes de persistir una cita en `ReservarTurnoView` o `ReprogramarTurnoView`, se adquiere un bloqueo de fila a nivel de base de datos para evaluar si el cupo fue tomado instantes antes.
+  - Si un turno es cancelado, su estado pasa a `CANCELADO`, liberando de forma automática el cupo para que otro afiliado pueda reservarlo inmediatamente.
+- **Sincronización Periódica**:
+  - Tanto la Web (`DashboardAfiliado.jsx`) como la App Móvil (`dashboard_afiliado_screen.dart`) realizan sondeo periódico cada 12 segundos y al enfocar la ventana, refrescando la disponibilidad de forma dinámica.
+
+### Mitigación de Ataques DDoS y Fuerza Bruta
+- **Filtro de Carga Útil (`PayloadSizeLimitMiddleware`)**: Rechaza con `413 Payload Too Large` solicitudes con cuerpos superiores a 256 KB, previniendo ataques de agotamiento de memoria y *JSON Bombs*.
+- **Rate Limiting Multicapa (`RateLimitMiddleware`)**:
+  - Límite global por IP: 150 peticiones/minuto.
+  - Límite por sesión de usuario autenticado: 100 peticiones/minuto.
+  - Límites estrictos para endpoints críticos: Login (40/min), OTP (40/min), Solicitud OTP (15/5min), Reserva de Citas (40/min).
+  - Emisión de cabecera estándar `Retry-After: 60`.
+- **Protección Anti-Timing Attacks**:
+  - Si una cédula no existe en el sistema, `LoginView` ejecuta una verificación con hash ficticio en tiempo constante (`DUMMY_PASSWORD_HASH`) para evitar la enumeración de usuarios por diferencia en los tiempos de respuesta.
+- **Bloqueo Distribuido por IP**:
+  - Se rastrean los intentos fallidos acumulados por IP (`login_fails_ip:{ip}`); tras 15 fallos consecutivos, la dirección IP queda bloqueada temporalmente con `429 Too Many Requests`.
+
+### Prevención de Escalamiento de Privilegios (Vertical y Horizontal)
+- **Anti-Escalamiento Vertical**:
+  - El registro de usuarios fuerza de manera inmutable el rol `AFILIADO`.
+  - En cada petición, `SessionValidatedJWTAuthentication` compara el rol incrustado en el token con el rol real en la base de datos; cualquier discrepancia invalida la sesión de inmediato.
+  - Los endpoints de funcionarios exigen permisos RBAC específicos (`IsRecepcion`, `IsMedico`, `IsSoporte`, `IsAdminRole`).
+- **Anti-Escalamiento Horizontal (Anti-BOLA/IDOR)**:
+  - Todo acceso a citas y notificaciones valida la regla ABAC `tiene_acceso_beneficiario()`, impidiendo que un usuario acceda o modifique turnos de terceros a menos que mantenga una `DelegacionFamiliar` activa verificada.
+
 ---
 
 ## 📄 Licencia y Uso Académico
 Proyecto desarrollado para la cátedra de **Seguridad de Software** - Universidad de las Fuerzas Armadas ESPE. Cumple con los estándares de seguridad defensiva, minimización de datos LOPDP y desarrollo seguro.
+

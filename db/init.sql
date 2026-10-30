@@ -98,9 +98,11 @@ CREATE TABLE IF NOT EXISTS core_turno (
     estado VARCHAR(20) NOT NULL DEFAULT 'RESERVADO' CHECK (estado IN ('RESERVADO', 'CANCELADO', 'ATENDIDO')),
     asistencia_confirmada BOOLEAN NOT NULL DEFAULT FALSE,
     creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    retencion_hasta DATE NOT NULL DEFAULT (CURRENT_DATE + INTERVAL '5 years')::date,
-    CONSTRAINT unique_medico_fecha_hora UNIQUE (medico_id, fecha, hora)
+    retencion_hasta DATE NOT NULL DEFAULT (CURRENT_DATE + INTERVAL '5 years')::date
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS unique_medico_fecha_hora_activo ON core_turno (medico_id, fecha, hora) WHERE estado = 'RESERVADO';
+CREATE UNIQUE INDEX IF NOT EXISTS unique_est_esp_fecha_hora_activo ON core_turno (establecimiento, especialidad, fecha, hora) WHERE estado = 'RESERVADO';
 
 -- 5. Tabla Inmutable de Auditoría Sanitizada (Log Scrubber WORM - Req. 111)
 CREATE TABLE IF NOT EXISTS core_auditlog (

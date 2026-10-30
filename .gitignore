@@ -17,7 +17,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Python virtualenv lib (do not ignore Flutter lib)
+/env/lib/
+/venv/lib/
 lib64/
 parts/
 sdist/
@@ -92,3 +94,4 @@ Thumbs.db
 # Docker / Entornos locales
 .env
 .env.local
+

@@ -31,9 +31,13 @@ class SessionValidatedJWTAuthentication(JWTAuthentication):
         user, validated_token = result
         session_id = validated_token.get("sid")
         mfa_ok = validated_token.get("mfa", False)
+        token_rol = validated_token.get("rol")
 
         if not session_id or not mfa_ok:
             raise AuthenticationFailed("Sesión inválida o factor MFA no verificado.")
+
+        if token_rol and token_rol != user.rol:
+            raise AuthenticationFailed("Inconsistencia en el rol del token (detección de escalamiento de privilegios).")
 
         try:
             session = UserSession.objects.get(
